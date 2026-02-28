@@ -1,0 +1,10 @@
+synthetic1.js Prototype Pollution: merge() recursively copies keys including __proto__, letting an attacker inject properties onto Object.prototype
+synthetic2.js ReDoS: The IP regex ^(\d+\.)+\d+$ has catastrophic backtracking on long non-matching input like 1.1.1.1.1.1.1.1X
+synthetic3.js JWT alg:none bypass: verify() explicitly returns the payload without any signature check when header.alg === 'none'
+synthetic4.js SQL Injection: search() correctly uses ? placeholders for values, but interpolates user-controlled column names directly into the query string
+synthetic5.js SSRF: Domain check uses endsWith() — an attacker uses evil.com/anything?x=allowed.com or registers evilallowed.com to bypass it
+synthetic6.js Insecure Randomness: Session IDs are generated with Math.random(), which is not cryptographically secure and can be predicted
+synthetic7.js Type Coercion Auth Bypass: user.id == resourceOwnerId uses loose equality (==) — passing 0 or true can match unintended user IDs via JS coercion 
+synthetic8.js Command Injection: inputPath is passed directly into exec() with template literals — a filename like x.jpg; rm -rf / executes arbitrary shell commands
+synthetic9.js Mass Assignment: create() spreads raw user data after setting role: 'user', so an attacker can override role, active, or id in the payload
+synthetic10.js Open Redirect: _isSafeRedirect checks startsWith(this.baseUrl) but baseUrl has no trailing slash — https://myapp.com.evil.com/ passes the check

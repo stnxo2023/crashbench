@@ -1,0 +1,10 @@
+synthetic1.rs Integer overflow: (debug panic / release wrap)current_size + data_len wraps on overflow in release mode, bypassing the capacity guard
+synthetic2.rs TOCTOU race condition: File existence and size are checked before opening; a symlink swap between the two operations enables writes outside the log dir
+synthetic3.rs Use-after-free via raw pointer:last_event stores a raw pointer into VecDeque; evicting the front element can invalidate it, causing UB when dereferenced
+synthetic4.rs Missing bounds check (OOB panic): get() and row_sum() skip the bounds validation that set() performs — user-controlled indices cause a panic/DoS
+synthetic5.rs Log injection:User input is interpolated directly into log entries with no sanitization, allowing log forging via embedded newlines or control chars
+synthetic6.rs Timing side-channel:Token comparison routes through HashMap::get (early exit on hash miss) rather than constant-time comparison, leaking token prefix via timing
+synthetic7.rs Path traversal:write_file skips the sanitization applied in read_file/delete_file, allowing ../ sequences to escape the base directory
+synthetic8.rs Silent integer truncation:ADMIN_FLAG = 0x100000000 is cast to u32 before the bit-check in is_admin(), making the flag always evaluate to zero — admin check silently always returns false
+synthetic9.rs Unbounded recursion / stack overflow DoS:deep_clone() and depth() recurse without a depth limit; a deeply nested attacker-controlled structure causes a stack overflow
+synthetic10.rs Off-by-one data loss:num_chunks = data.len() / chunk_size performs integer division, silently discarding the remainder — the final partial chunk is never written
