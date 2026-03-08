@@ -35,6 +35,11 @@ service_name = 'Neuroengine-Large'
 total_time_seconds = 0.0
 total_tokens = 0  # Includes reasoning tokens, excludes judge tokens
 
+# Global prompts (read from config at startup)
+GLOBAL_PROMPT = ""
+GLOBAL_SYSTEM_PROMPT = ""
+GLOBAL_POSTPROMPT = ""
+
 
 class EngineType(Enum):
     """Enumeration of supported AI engines."""
@@ -118,7 +123,7 @@ def call_AI_claude(systemprompt, prompt, model="claude-3-opus-20240229", max_tok
     return response.content[0].text
 
 
-def call_AI_chatGPT(systemprompt, prompt, model, max_tokens=8192, temperature=1.0, reasoning_effort="high", judge_endpoint=None, judge_model=None, judge_apikey=None, return_reasoning=False, verbose=False, track_usage=False):
+def call_AI_chatGPT(systemprompt, prompt, _model=None, max_tokens=8192, temperature=1.0, reasoning_effort="high", endpoint=None, apikey=None, return_reasoning=False, verbose=False, track_usage=False):
     """
     Call the OpenAI ChatGPT API to analyze code for bugs.
     
@@ -141,18 +146,18 @@ def call_AI_chatGPT(systemprompt, prompt, model, max_tokens=8192, temperature=1.
     """
     global total_tokens
     # Use judge-specific configuration if provided
-    if judge_endpoint is not None:
-        base_url = judge_endpoint
+    if endpoint is not None:
+        base_url = endpoint
     else:
         base_url = openai.api_base
         
-    if judge_apikey is not None:
-        api_key_to_use = judge_apikey
+    if apikey is not None:
+        api_key_to_use = apikey
     else:
         api_key_to_use = api_key
     
     client = OpenAI(api_key=api_key_to_use, base_url=base_url)
-    model_to_use = judge_model if judge_model is not None else model
+    model_to_use = _model if _model is not None else model
     
     # Build API parameters
     api_params = {
@@ -163,49 +168,30 @@ def call_AI_chatGPT(systemprompt, prompt, model, max_tokens=8192, temperature=1.
         ],
         'temperature': temperature,
         'max_tokens': max_tokens,
-        'stream': True
+        'stream': False
     }
-    
-    # Add stream_options to include usage data (for token tracking)
-    if track_usage:
-        api_params['stream_options'] = {'include_usage': True}
     
     # Add reasoning_effort parameter for o1/o3 models if not default
     if reasoning_effort is not None:
         api_params['reasoning_effort'] = reasoning_effort
     
-    stream = client.chat.completions.create(**api_params)
-    
-    full_response = ""
-    reasoning_response = ""
-    usage_data = None
-    
-    for chunk in stream:
-        # Check if chunk has usage information (some APIs provide this)
-        if hasattr(chunk, 'usage') and chunk.usage is not None:
-            usage_data = chunk.usage
-            continue  # Skip usage chunks
-        
-        # Collect reasoning tokens if present (for o1/o3 models) - stream them in verbose mode
-        if hasattr(chunk.choices[0].delta, 'reasoning_content') and chunk.choices[0].delta.reasoning_content is not None:
-            reasoning_response += chunk.choices[0].delta.reasoning_content
-            # Stream reasoning tokens to stdout with R prefix (verbose mode only)
-            if verbose:
-                print(f"R{chunk.choices[0].delta.reasoning_content}", end='', flush=True)
-        # Collect regular content - stream it in verbose mode
-        if chunk.choices[0].delta.content is not None:
-            full_response += chunk.choices[0].delta.content
-            # Stream regular content to stdout (verbose mode only)
-            if verbose:
-                print(chunk.choices[0].delta.content, end='', flush=True)
-    
+    for i in range(5):
+        response = client.chat.completions.create(**api_params)
+        full_response = ""
+        reasoning_response = ""
+        usage_data = getattr(response, 'usage', None)
+        # Collect reasoning content if present (for o1/o3 models)
+        if hasattr(response.choices[0].message, 'reasoning') and response.choices[0].message.reasoning is not None:
+            reasoning_response = response.choices[0].message.reasoning
+        # Collect regular content
+        if response.choices[0].message and response.choices[0].message.content is not None:
+            full_response = response.choices[0].message.content
+        if len(full_response)>0:
+            break
+        print(f"[E] Response==0, retrying ({i}/5)...")
+
     if return_reasoning:
         full_response = reasoning_response + "\n" + full_response
-    
-    # Remove analysis tags if present (for final output only)
-    analysis_end = full_response.find("</analysis>")
-    if analysis_end > -1:
-        full_response = full_response[analysis_end + 11:]
     
     # Track token usage if requested (input + output + reasoning tokens)
     if track_usage and usage_data is not None:
@@ -277,9 +263,6 @@ def findBug(file_path, bugline, service_name, engine, max_tokens=8192, temperatu
     Returns:
         int: 1 if bug found within +/- 2 lines, 0 otherwise
     """
-    # Read configuration
-    prompt, systemprompt, postprompt = readConfig('config.ini')
-    
     # Read the code file
     try:
         with open(file_path, 'r') as f:
@@ -291,30 +274,53 @@ def findBug(file_path, bugline, service_name, engine, max_tokens=8192, temperatu
     lines = c_code.split('\n')
     numbered_lines = [f"{line_num} {line}" for line_num, line in enumerate(lines, start=1)]
     code = '\n'.join(numbered_lines)
-    code = '\n### BEGIN CODE ###\n' + code + '\n### END CODE ###\n'
+    code = "\n"+code+"\n"
+    code = '\n### BEGIN CODE ###\n' + code + '\n### END CODE ###\n' # coment for vulnLLM
     
-    # Build initial prompt
-    prompt = f"{prompt}{code}{postprompt}\n"
+    # Build initial prompt using global prompts
+    prompt = f"{GLOBAL_PROMPT}{code}{GLOBAL_POSTPROMPT}\n"
+    if(verbose):
+        print(("-"*80)+"prompt")
+        print(prompt)
     
     # Call the appropriate AI engine (track usage for main report, not judge)
     if engine == EngineType.OPENAI:
-        report = call_AI_chatGPT(systemprompt, prompt, service_name, max_tokens, temperature, reasoning_effort, return_reasoning=True, verbose=verbose, track_usage=track_usage)
+        report = call_AI_chatGPT(GLOBAL_SYSTEM_PROMPT, prompt, service_name, max_tokens, temperature, reasoning_effort, return_reasoning=True, verbose=verbose, track_usage=track_usage)
     elif engine == EngineType.CLAUDE:
-        report = call_AI_claude(systemprompt, prompt, service_name, max_tokens, temperature, track_usage=track_usage)
+        report = call_AI_claude(GLOBAL_SYSTEM_PROMPT, prompt, service_name, max_tokens, temperature, track_usage=track_usage)
     elif engine == EngineType.NEUROENGINE:
         report = call_neuroengine(code, prompt, max_tokens, temperature)
+    if(verbose):
+        print(("-"*80)+"output")
+        print(report)
     
     # Build judge prompt to extract bug line number
-    judge_prompt = (
-        f"We have a vulnerability report:\n-- BEGIN REPORT --\n{report}\n-- END REPORT --\n"
-        "Your task is to interpret the report and find the line number where the root cause of "
-        "the bug happens according to the report. If there is a range, choose the middle. "
-        "Your output must follow strictly this format:\n\nbugline=N\n\nDo not write anything else except that line."
-    )
-    
-    judge_report = call_AI_chatGPT(systemprompt, judge_prompt, service_name, max_tokens, temperature, reasoning_effort='low',
-                     judge_endpoint=judge_endpoint, judge_model=judge_model, judge_apikey=judge_apikey)
-    
+    judge_prompt =f"""We have a vulnerability report:
+-- BEGIN REPORT --
+{report}
+-- END REPORT --
+
+Your task is to interpret the report and find the **exact line number** where the root cause of the bug happens **according to the report**. 
+
+**Rules:**
+1. The vulnerable line **must be clearly and explicitly specified** in the report. If the report does not explicitly state a specific line number or a clear range of lines, output `bugline=0`.
+2. If the report describes a range of lines, choose the **middle line** of that range.
+3. If the report does **not detect any vulnerability** or is inconclusive, output `bugline=0`.
+
+**Output format (strictly):**
+bugline=N
+
+Replace `N` with the determined line number, or `0` if no clear vulnerable line is specified or no vulnerability is detected. 
+Do not write anything else except that line."""
+
+    if(verbose):
+        print(("-"*80)+"judge prompt")
+        print(judge_prompt)
+    judge_report = call_AI_chatGPT(GLOBAL_SYSTEM_PROMPT, judge_prompt, judge_model, max_tokens, temperature, reasoning_effort='low',
+                     endpoint=judge_endpoint, apikey=judge_apikey)
+    if(verbose):
+        print(("-"*80)+"judgement")
+        print(judge_report)
     # Find bug line in the judge report
     pattern = r"bugline\s*[=:]\s*(\d+)"
     match = re.search(pattern, judge_report.lower())
@@ -405,8 +411,9 @@ def main():
     
     service_name = args.model
 
-    # Read configuration
-    prompt, systemprompt, postprompt = readConfig('config.ini')
+    # Read configuration once at the beginning and store in global variables
+    global GLOBAL_PROMPT, GLOBAL_SYSTEM_PROMPT, GLOBAL_POSTPROMPT
+    GLOBAL_PROMPT, GLOBAL_SYSTEM_PROMPT, GLOBAL_POSTPROMPT = readConfig('config.ini')
     
     # Calculate max possible score
     max_score = 0
